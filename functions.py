@@ -231,6 +231,46 @@ def discard_AB(pos):
         return False
     else:
         return True
+
+
+############ADDITIONAL FUNCTIONS FOR OPTIMISTIC APPROACH################
+def layer_AB_from_r(hit, r_boundary=14.0):
+    """
+    Returns 0 for inner layer (1A), 1 for outer layer (1B).
+    Uses radius threshold to separate.
+    """
+    r = math.sqrt(hit.x**2 + hit.y**2)
+    return 0 if r < r_boundary else 1
+
+def compute_delta_r(hits):
+    """
+    Computes delta_r between hit layers (1A vs 1B).
+    Returns None if all hits are in same layer.
+    """
+    if len(hits) < 2:
+        return None
+
+    layers = [layer_AB_from_r(h) for h in hits]
+    if min(layers) == max(layers):
+        # all hits in same layer → conservative case only
+        return None
+
+    rs = [math.sqrt(h.x**2 + h.y**2) for h in hits]
+    return max(rs) - min(rs)  # this gives Δr ≈ 1 mm
+
+def analytic_delta_z(hits, bx, by, bz):
+    """
+    Optimistic model: delta_z = delta_r * |cot(theta)|
+    Uses barycenter direction for θ.
+    """
+    delta_r = compute_delta_r(hits)
+    if delta_r is None:
+        return None
+
+    theta = math.acos(bz / math.sqrt(bx*bx + by*by + bz*bz))
+    cotθ = math.cos(theta) / math.sin(theta)
+    return abs(delta_r * cotθ)
+
     
     
 ####################Do overlap layer merging by summing energy and keeping innermost radius hit#####################

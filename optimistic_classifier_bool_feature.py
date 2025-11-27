@@ -13,21 +13,25 @@ from collections import defaultdict
 
 ROOT.gROOT.SetBatch(True)
 
-# --- Command-line args ---
+# === Command-line args ===
 parser = argparse.ArgumentParser()
-parser.add_argument('--run', action='store_true', help='Process and save signal, and background files')
+parser.add_argument('--run', action='store_true', help='Process and save muon, signal, and background files')
 parser.add_argument('--classify', action='store_true', help='Train and evaluate a classifier')
 args = parser.parse_args()
 
-# --- Geometry config ---
+# === Geometry config ===
 PITCH = functions.PITCH_MM
 RADIUS = functions.RADIUS_MM
 LAYER_RADII = [14, 36, 58]
 TARGET_LAYER = 0
 
-
+# === Process and save data ===
 if args.run:
     all_configs = {
+        'muons': {
+            'files': glob.glob('/ceph/submit/data/user/j/jaeyserm/fccee/beam_backgrounds/CLD_o2_v05/mu_theta_0-180_p_50/*.root'),
+            'outfile': 'ABmuons_edep.pkl'
+        },
         'signal': {
             'files': glob.glob('/ceph/submit/data/group/fcc/ee/detector/VTXStudiesFullSim/CLD_wz3p6_ee_qq_ecm91p2/*.root'),
             'outfile': 'ABsignal_edep.pkl'
@@ -43,6 +47,7 @@ if args.run:
         outfile = config['outfile']
         cluster_metrics = []
         limit = {
+            'muons': 978,
             'signal': 100,
             'background': 1247
         }[label]
@@ -83,7 +88,10 @@ if args.run:
                     if not hit_group:
                         continue
                     _, _, pid = hit_group[0]
-                    p = functions.Particle(trackID=trackID, cellID=None, pid=pid)
+                    ##
+                    p = functions.Particle(trackID=trackID)
+                    p.pid = pid
+                    ##
                     for _, h, _ in hit_group:
                         p.add_hit(h)
                         
@@ -94,17 +102,29 @@ if args.run:
                     b_x, b_y, b_z = functions.geometric_baricenter(p.hits)
                     cos_theta = functions.cos_theta(b_x, b_y, b_z)
                     mc_energy = p.hits[0].energy
+
+                    ###changes
+
                     z_ext = p.z_extent()
+
+                    
+                    if functions.discard_AB(pos): #if cluster passes B, set hit_B to 1
+                        hit_B = 1
+                    else:
+                        hit_B = 0
+                    ###
+
+
                     nrows = p.n_phi_rows(PITCH, RADIUS)
 
-                    cluster_metrics.append((z_ext, nrows, multiplicity, total_edep, mc_energy, cos_theta, b_x, b_y, pid))
+                    cluster_metrics.append((z_ext, nrows, multiplicity, total_edep, mc_energy, cos_theta, b_x, b_y, pid, hit_B))
 
         with open(outfile, 'wb') as f:
             pickle.dump(cluster_metrics, f)
-        print(f"Saved {label} clusters to {outfile}")
+        print(f"✅ Saved {label} clusters to {outfile}")
 
 
-    
+
 if args.classify:
     import xgboost as xgb
     from sklearn.model_selection import train_test_split
@@ -121,13 +141,37 @@ if args.classify:
     import pickle
     import os
     import random
-    from functions import relabel_noise_clusters, get_features_and_labels
+    from functions import relabel_noise_clusters
+
+    def get_features_and_labels(signal_data, background_data, epsilon=1e-6, max_samples=None):
+        def transform(row):
+            z, rows, mult, edep, _, cos, _, _, _, hit_B = row
+            return (
+                math.log(z + epsilon),        # log(z_extent)
+                rows,                         # number of φ rows
+                mult,                         # multiplicity
+                math.log(edep + epsilon),     # log(energy deposition)
+                cos,                           # cos(θ)
+                hit_B                        # hit in region B (1 if hit, 0 if not)
+            )
+        
+        sig = [(1, transform(row)) for row in signal_data]
+        bkg = [(0, transform(row)) for row in background_data]
+        data = sig + bkg
+        random.shuffle(data)
+
+        if max_samples is not None:
+            data = data[:max_samples]
+
+        labels, features = zip(*data)
+        return np.array(features), np.array(labels)
+
 
     outdir = 'Classification_AB'
     os.makedirs(outdir, exist_ok=True)
     random.seed(42)
 
-    # --- Load data ---
+    # === Load data ===
     with open('ABmuons_edep.pkl', 'rb') as f:
         muons = pickle.load(f)
     with open('ABsignal_edep.pkl', 'rb') as f:
@@ -135,7 +179,7 @@ if args.classify:
     with open('ABbkg_edep.pkl', 'rb') as f:
         background = pickle.load(f)
 
-    # --- Reassign noise-like clusters to background ---
+    # === Reassign noise-like clusters to background ===
     noise_pids = {11, -11, 13, -211, 22, 211, 2212, -2212}
     energy_cut = 0.01
     clean_muons, reassigned_muons = relabel_noise_clusters(muons, noise_pids, energy_cut)
@@ -149,9 +193,10 @@ if args.classify:
     print(f"Clean signal: {len(clean_signal)}")
     print(f"Reassigned to background: {len(reassigned_muons) + len(reassigned_signal)}")
 
-    # --- Feature extraction and split ---
+    # === Feature extraction and split ===
     X, y = get_features_and_labels(sampled_signal, all_background)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
 
     clf = xgb.XGBClassifier(
         use_label_encoder=False,
@@ -167,7 +212,7 @@ if args.classify:
     clf.fit(X_train, y_train)
     y_proba = clf.predict_proba(X_test)[:, 1]
 
-    # --- Sweep thresholds to find one that preserves ≥99% signal
+    # === Sweep thresholds to find one that preserves ≥99% signal
     thresholds = np.linspace(0.0, 1.0, 500)
     tpr_list, fpr_list, f1_list = [], [], []
 
@@ -247,7 +292,8 @@ if args.classify:
         r"$\varphi$ extent",
         r"multiplicity",
         r"$\log(E_{\mathrm{dep}})$",
-        r"$\cos\theta$"
+        r"$\cos\theta$",
+        r"$\mathrm{hit}_B$"
     ],
     outdir="Classification_AB",
     filename="feature_importance",
