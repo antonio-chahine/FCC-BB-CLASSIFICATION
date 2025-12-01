@@ -147,6 +147,8 @@ if args.classify:
     from sklearn.metrics import ConfusionMatrixDisplay
     import pandas as pd
     from sklearn.metrics import accuracy_score
+    from tqdm import trange
+
 
     def get_features_and_labels(signal_data, background_data, epsilon=1e-6, max_samples=None):
         def transform(row):
@@ -156,8 +158,8 @@ if args.classify:
                 rows,                         # number of φ rows
                 mult,                         # multiplicity
                 math.log(edep + epsilon),     # log(energy deposition)
-                cos,                           # cos(θ)
-                hit_B                        # hit in region B (1 if hit, 0 if not)
+                cos,                          # cos(θ)
+                hit_B                         # hit in region B (1 if hit, 0 if not)
             )
         
         sig = [(1, transform(row)) for row in signal_data]
@@ -206,9 +208,10 @@ if args.classify:
     all_signal = clean_muons + clean_signal
     sampled_signal = random.sample(all_signal, len(all_background))
 
-    print(f"Clean muons: {len(clean_muons)}")
-    print(f"Clean signal: {len(clean_signal)}")
-    print(f"Reassigned to background: {len(reassigned_muons) + len(reassigned_signal)}")
+    print(f"Reassigned signal clusters")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Using device:", device)
 
     # --- Feature extraction and split ---
     X_np, y_np = get_features_and_labels(sampled_signal, all_background)
@@ -222,19 +225,13 @@ if args.classify:
     y_torch = torch.tensor(y_np, dtype=torch.float32).view(-1, 1)
 
     dataset = TensorDataset(X_torch, y_torch)
+    dataset_train, dataset_validate, dataset_test = random_split(dataset, 
+                lengths = [0.6,0.2,0.2], generator = torch.Generator().manual_seed(2)) 
 
-    dataset = TensorDataset(X_torch, y_torch)
-    dataset_train, dataset_validate, dataset_test = random_split(dataset, lengths = [0.6,0.2,0.2], generator = torch.Generator().manual_seed(2)) # Split dataset into separate datasets for training & testing
-
-    dloader_train = DataLoader(dataset_train, batch_size = 32, shuffle = True)
-    dloader_validate = DataLoader(dataset_validate, batch_size = 32, shuffle = True)
-
-    X_train = torch.vstack([dataset_train[i][0] for i in range(len(dataset_train))])
-    y_train = torch.vstack([dataset_train[i][1] for i in range(len(dataset_train))])
-    X_valid = torch.vstack([dataset_validate[i][0] for i in range(len(dataset_validate))])
-    y_valid = torch.vstack([dataset_validate[i][1] for i in range(len(dataset_validate))])
-    X_test = torch.vstack([dataset_test[i][0] for i in range(len(dataset_test))])
-    y_test = torch.vstack([dataset_test[i][1] for i in range(len(dataset_test))])
+    dloader_train = DataLoader(dataset_train, batch_size = 512, shuffle = True,
+                                       pin_memory=True, num_workers=4)
+    dloader_validate = DataLoader(dataset_validate, batch_size = 512, shuffle = True,
+                                          pin_memory=True, num_workers=4)
 
 
     model = nn.Sequential(
@@ -242,10 +239,11 @@ if args.classify:
         nn.ReLU(),
         nn.Linear(32, 32),
         nn.ReLU(),
-        nn.Linear(32, 1) 
-    )
+        nn.Linear(32, 1),
+        nn.Sigmoid()
+    ).to(device)
 
-    loss_fcn = nn.BCEWithLogitsLoss() 
+    loss_fcn = nn.BCELoss()
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
 
 
@@ -253,29 +251,36 @@ if args.classify:
         tot_loss = 0
         valid_loss = 0
         for X_train, y_train in dloader_train:
+            X_train = X_train.to(device, non_blocking=True)
+            y_train = y_train.to(device, non_blocking=True)
+
             y_pred = model(X_train)
             optimizer.zero_grad()
             loss = loss_fcn(y_pred, y_train.reshape(-1,1))
-            tot_loss += loss.detach()
             loss.backward()
             optimizer.step()
+
+            tot_loss += loss.item()
     
         model.eval()
         for X_valid, y_valid in dloader_validate:
-            y_pred_v = model(X_valid)
-            vloss = loss_fcn(y_pred_v, y_valid.reshape(-1,1))
-            valid_loss += vloss.detach()
-        
+            X_valid = X_valid.to(device, non_blocking=True)
+            y_valid = y_valid.to(device, non_blocking=True)
+            with torch.no_grad():
+                y_pred_v = model(X_valid)
+                vloss = loss_fcn(y_pred_v, y_valid.reshape(-1,1))
+
+                valid_loss += vloss.item()
+
         return tot_loss/len(dataset_train), valid_loss/len(dataset_validate)
 
     best_val_acc = 0
     best_roc = 0
     
-    # Train 150 epochs
+    # Train 100 epochs
     tloss, vloss = [], []
-    for epoch in range(150):
-        torch.manual_seed(1)
-
+    torch.manual_seed(1)
+    for epoch in trange(100, desc="Training epochs"):
         train_loss, valid_loss = train_epoch(model, opt)
         tloss.append(train_loss)
         vloss.append(valid_loss)
@@ -285,15 +290,14 @@ if args.classify:
     torch.save(model, 'AB_NN_Model.pt')
 
     torch.save({
-        "X_train": X_train,
-        "y_train": y_train,
-        "X_valid": X_valid,
-        "y_valid": y_valid,
-        "X_test":  X_test,
-        "y_test":  y_test
+        "X_train": torch.stack([x.cpu() for x, _ in dataset_train]),
+        "y_train": torch.stack([y.cpu() for _, y in dataset_train]),
+        "X_valid": torch.stack([x.cpu() for x, _ in dataset_validate]),
+        "y_valid": torch.stack([y.cpu() for _, y in dataset_validate]),
+        "X_test":  torch.stack([x.cpu() for x, _ in dataset_test]),
+        "y_test":  torch.stack([y.cpu() for _, y in dataset_test])
     }, "AB_split_data.pt")
 
-    print("Saved train/valid/test tensors to AB_split_data.pt")
 
 
             
@@ -306,8 +310,13 @@ if args.evaluate:
     from sklearn.metrics import accuracy_score, roc_curve, roc_auc_score
     from matplotlib.ticker import MultipleLocator
 
+    outdir = "bool_NN"
+    os.makedirs(outdir, exist_ok=True)
 
-    model = torch.load('AB_NN_Model.pt', weights_only=False) #NEED THE WEIGHTS ONLY PART!!!!
+
+    model = torch.load('AB_NN_Model.pt', weights_only=False)
+    model.eval()
+    model = model.cpu()        
     tloss, vloss = np.load('AB_losses.npy')
 
 
@@ -323,35 +332,42 @@ if args.evaluate:
     ax.yaxis.set_minor_locator(MultipleLocator(4))
     ax.grid(color='xkcd:dark blue',alpha = 0.2)
     ax.legend(loc='upper right',fontsize = 12)
+    plt.savefig(f"{outdir}/AB_NN_loss.pdf")
+    plt.close()
+
 
 
     data = torch.load("AB_split_data.pt")
+    X_test = data["X_test"]
+    y_test = data["y_test"]
 
-    X_train = data["X_train"]
-    y_train = data["y_train"]
-    X_valid = data["X_valid"]
-    y_valid = data["y_valid"]
-    X_test  = data["X_test"]
-    y_test  = data["y_test"]
+    with torch.no_grad():
+        preds = model(X_test).cpu()     
+        y_true = y_test.cpu()
 
-    fig, ax = plt.subplots(1,1,figsize = (8,6),dpi = 150)
-
-    test_accuracy = (torch.Tensor([0 if x < 0.5 else 1 for x in model(X_test)]).reshape(y_test.shape)==y_test).sum()/len(X_test)
-    print("Test accuracy = {:.1f}%".format(test_accuracy*100))
+    pred_labels = (preds >= 0.5).float()
+    test_accuracy = (pred_labels == y_true).float().mean()
+    print(f"Test accuracy = {test_accuracy.item()*100:.1f}%")
 
 
-    fpr, tpr, thresholds = roc_curve(y_test.detach().numpy(), model(X_test).detach().numpy())
-    roc_score = roc_auc_score(y_true = y_test.detach().numpy(),
-                            y_score = model(X_test).detach().numpy())
+    # --- ROC CURVE ---
+    y_true_np = y_true.numpy()
+    preds_np = preds.numpy()
 
-    fig, ax = plt.subplots(1,1,figsize = (6, 4), dpi = 150)
+    fpr, tpr, thresholds = roc_curve(y_true_np, preds_np)
+    roc_score = roc_auc_score(y_true_np, preds_np)
+
+
+    fig, ax = plt.subplots(1,1,figsize = (6, 5), dpi = 150)
     ax.plot(fpr, tpr, color='#D55E00')
-    ax.set_xlabel('False positive rate',fontsize = 20)
-    ax.set_ylabel('True positive rate',fontsize = 20)
-    ax.set_title('ROC curve, test data',fontsize = 24)
+    ax.set_xlabel('False positive rate',fontsize = 15)
+    ax.set_ylabel('True positive rate',fontsize = 15)
+    ax.set_title('ROC curve',fontsize = 20)
     ax.xaxis.set_minor_locator(MultipleLocator(0.04))
     ax.yaxis.set_minor_locator(MultipleLocator(0.04))
     ax.tick_params(which='both',direction='in',top=True,right=True,labelsize = 16)
     ax.grid(color='xkcd:dark blue',alpha = 0.2)
     print('ROC score = {:.5f}'.format(roc_score))
+    plt.savefig(f"{outdir}/AB_NN_ROC_curve.pdf")
+    plt.close()
 
