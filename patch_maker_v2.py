@@ -24,7 +24,7 @@ N_Z_BINS   = functions.n_z_bins
 
 LAYER_RADII   = [14, 36, 58]
 TARGET_LAYER  = 0          # layer 1 (A+B)
-R_BOUNDARY_AB = 14.0       # inner/outer split
+R_BOUNDARY_AB = 13.919       # inner/outer split
 
 
 # ============================================================
@@ -104,7 +104,17 @@ def make_patch_for_particle(event_hits, bx, by, bz, patch_size):
     patch_half = patch_size // 2
     z_c, phi_c = barycenter_indices(bx, by, bz)
 
-    if not is_center_valid(z_c, phi_c, patch_half):
+    # after computing z_c, phi_c
+    max_jitter = 4   # pixels, e.g. up to ±4 pixels in each direction
+
+    dz_jitter   = np.random.randint(-max_jitter, max_jitter + 1)
+    dphi_jitter = np.random.randint(-max_jitter, max_jitter + 1)
+
+    z_c_shifted   = z_c   + dz_jitter
+    phi_c_shifted = phi_c + dphi_jitter
+
+
+    if not is_center_valid(z_c_shifted, phi_c_shifted, patch_half):
         return None, None
 
     patch = np.zeros((2, patch_size, patch_size), dtype=np.float32)
@@ -114,8 +124,8 @@ def make_patch_for_particle(event_hits, bx, by, bz, patch_size):
 
     for h in event_hits:
         z_idx, phi_idx = functions.get_grid_indices(h.x, h.y, h.z)
-        dz   = z_idx - z_c
-        dphi = phi_idx - phi_c
+        dz   = z_idx - z_c_shifted
+        dphi = phi_idx - phi_c_shifted
 
         if abs(dz) >= patch_half or abs(dphi) >= patch_half:
             continue
