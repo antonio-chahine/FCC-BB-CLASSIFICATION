@@ -104,36 +104,42 @@ def make_patch_for_particle(event_hits, bx, by, bz, patch_size):
     patch_half = patch_size // 2
     z_c, phi_c = barycenter_indices(bx, by, bz)
 
-    # after computing z_c, phi_c
-    max_jitter = 4   # pixels, e.g. up to ±4 pixels in each direction
-
+    # ---------------------------------------------
+    # Add jitter to avoid overfitting to grid center
+    # ---------------------------------------------
+    max_jitter = 4
     dz_jitter   = np.random.randint(-max_jitter, max_jitter + 1)
     dphi_jitter = np.random.randint(-max_jitter, max_jitter + 1)
 
     z_c_shifted   = z_c   + dz_jitter
     phi_c_shifted = phi_c + dphi_jitter
 
-
     if not is_center_valid(z_c_shifted, phi_c_shifted, patch_half):
         return None, None
 
+    # ---------------------------------------------
+    # Initialise patch (layer A = 0, layer B = 1)
+    # ---------------------------------------------
     patch = np.zeros((2, patch_size, patch_size), dtype=np.float32)
 
     hits_inside_patch = []
-    patch_has_signal = False
 
+    # ---------------------------------------------
+    # Fill patch
+    # ---------------------------------------------
     for h in event_hits:
         z_idx, phi_idx = functions.get_grid_indices(h.x, h.y, h.z)
-        dz   = z_idx - z_c_shifted
+        dz   = z_idx  - z_c_shifted
         dphi = phi_idx - phi_c_shifted
 
+        # outside patch area
         if abs(dz) >= patch_half or abs(dphi) >= patch_half:
             continue
 
         iz   = dz   + patch_half
         iphi = dphi + patch_half
 
-        # apply optional EDep threshold
+        # Pixel energy: apply optional threshold
         edep_val = h.edep if h.edep >= EDEP_THRESHOLD else 0.0
 
         layer = get_layer_AB(h)
@@ -141,26 +147,27 @@ def make_patch_for_particle(event_hits, bx, by, bz, patch_size):
 
         hits_inside_patch.append(h)
 
-        # signal PID check
-        if h.pid in signal_pids:
-            patch_has_signal = True
-
+    # No hits → no patch
     if len(hits_inside_patch) == 0:
         return None, None
 
-    # ======================================================
-    # DROP PATCH if *all* hits have PIDs in noise_pids
-    # ======================================================
-    all_noise = True
+    # ---------------------------------------------
+    # NEW SIGNAL DEFINITION
+    # Patch is signal if ANY hit has PID NOT in noise_pids
+    # ---------------------------------------------
+    patch_has_signal = False
     for h in hits_inside_patch:
-        if (h.pid not in noise_pids) and (h.pid is not None):
-            all_noise = False
+        if h.pid is None:
+            continue
+        if h.pid not in noise_pids:
+            patch_has_signal = True
             break
 
-    if all_noise:
-        return None, None
-
+    # ---------------------------------------------
+    # RETURN patch + label
+    # ---------------------------------------------
     return patch, patch_has_signal
+
 
 
 # ============================================================
@@ -224,6 +231,9 @@ def process_file(filename, patch_size, max_events):
         for trackID, hitlist in particles.items():
             if len(hitlist) == 0:
                 continue
+
+            if len(hitlist) >= 2:
+                hitlist = functions.merge_cluster_hits(hitlist)
 
             bx, by, bz = functions.geometric_baricenter(hitlist)
 
