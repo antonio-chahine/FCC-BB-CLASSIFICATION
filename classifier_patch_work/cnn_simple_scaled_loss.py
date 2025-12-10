@@ -13,7 +13,7 @@ from tqdm import trange
 parser = argparse.ArgumentParser()
 parser.add_argument("--classify", action="store_true")
 parser.add_argument("--evaluate", action="store_true")
-parser.add_argument("--data", default="AB_patches_final_2.npz")
+parser.add_argument("--data", default="AB_patches_multiplicity_energycut.npz")
 args = parser.parse_args()
 
 # ======================================================================
@@ -21,7 +21,7 @@ args = parser.parse_args()
 # ======================================================================
 if args.classify:
 
-    outdir = "CNN_AB"
+    outdir = "CNN_AB_scaled_loss_multiplicity_energy"
     os.makedirs(outdir, exist_ok=True)
 
     print("Loading dataset...")
@@ -53,7 +53,7 @@ if args.classify:
     # CNN MODEL (same style as notes: Sequential + simple)
     # ======================================================================
     model = nn.Sequential(
-        nn.Conv2d(2, 16, kernel_size=3, padding=1),
+        nn.Conv2d(4, 16, kernel_size=3, padding=1), #change for 4 input channels
         nn.ReLU(),
         nn.MaxPool2d(2),
 
@@ -63,10 +63,17 @@ if args.classify:
 
         nn.Flatten(),
         nn.Linear(32 * 8 * 8, 1),   # for 32x32 input
-        nn.Sigmoid()
     ).to(device)
 
-    loss_fcn = nn.BCELoss()
+
+    # Compute class weights
+    N_pos = y_torch.sum()
+    N_neg = len(y_torch) - N_pos
+
+    pos_weight = (N_neg / N_pos)
+    pos_weight = torch.tensor([pos_weight], dtype=torch.float32).to(device)
+
+    loss_fcn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     # ======================================================================
@@ -105,7 +112,7 @@ if args.classify:
         return total/len(dloader_train), vtotal/len(dloader_validate)
 
     print("Training CNN...")
-    for epoch in trange(200, desc="Epochs"):
+    for epoch in trange(100, desc="Epochs"):
         train_l, val_l = train_epoch()
         tloss.append(train_l)
         vloss.append(val_l)
@@ -128,7 +135,7 @@ if args.classify:
 # ======================================================================
 if args.evaluate:
 
-    outdir = "CNN_AB"
+    outdir = "CNN_AB_scaled_loss_multiplicity_energy"
     os.makedirs(outdir, exist_ok=True)
 
     # Load model + losses + splits
@@ -143,8 +150,11 @@ if args.evaluate:
 
     X_test = torch.stack([x for x, _ in test_set])
     y_test = torch.stack([y for _, y in test_set])
+    labels = y_test.cpu()
 
+    # --------------------------------------------------------
     # Loss curves
+    # --------------------------------------------------------
     fig, ax = plt.subplots(figsize=(8,6), dpi=150)
     ax.plot(tloss, label="Training loss", color="black")
     ax.plot(vloss, label="Validation loss", color="#D55E00")
@@ -157,20 +167,39 @@ if args.evaluate:
     plt.savefig(f"{outdir}/CNN_loss.pdf")
     plt.close()
 
+    # --------------------------------------------------------
     # Predictions
+    # --------------------------------------------------------
     with torch.no_grad():
-        preds = model(X_test).cpu()
-        labels = y_test.cpu()
-        preds_bin = (preds >= 0.5).float()
+        logits = model(X_test)
+        probs = torch.sigmoid(logits).cpu()
 
-    acc = accuracy_score(labels, preds_bin)
-    print(f"Test accuracy = {acc*100:.1f}%")
+    # Accuracy at fixed threshold 0.5
+    preds_05 = (probs >= 0.5).float()
+    acc_05 = accuracy_score(labels, preds_05)
+    print(f"Accuracy @ threshold 0.5 = {acc_05*100:.2f}%")
 
-    # ROC curve
-    fpr, tpr, _ = roc_curve(labels.numpy(), preds.numpy())
-    auc = roc_auc_score(labels.numpy(), preds.numpy())
+    # --------------------------------------------------------
+    # ROC + AUC
+    # --------------------------------------------------------
+    fpr, tpr, thresholds = roc_curve(labels.numpy(), probs.numpy())
+    auc = roc_auc_score(labels.numpy(), probs.numpy())
     print("ROC AUC =", auc)
 
+    # Best threshold = argmax(Youden J = TPR - FPR)
+    J = tpr - fpr
+    best_idx = np.argmax(J)
+    best_thresh = thresholds[best_idx]
+    print(f"Optimal threshold = {best_thresh:.5f}")
+
+    # Accuracy at optimal threshold
+    preds_best = (probs >= best_thresh).float()
+    acc_best = accuracy_score(labels, preds_best)
+    print(f"Accuracy @ optimal threshold = {acc_best*100:.2f}%")
+
+    # --------------------------------------------------------
+    # ROC plot
+    # --------------------------------------------------------
     fig, ax = plt.subplots(figsize=(6,5), dpi=150)
     ax.plot(fpr, tpr, color="#D55E00")
     ax.plot([0,1],[0,1],'--')
@@ -180,4 +209,3 @@ if args.evaluate:
     ax.grid(alpha=0.3)
     plt.savefig(f"{outdir}/CNN_ROC.pdf")
     plt.close()
-

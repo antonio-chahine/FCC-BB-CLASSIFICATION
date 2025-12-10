@@ -30,7 +30,7 @@ DEFAULT_PATCH_SIZE = 32
 
 # Noise definition for reassignment
 noise_pids = {11, -11, 13, -13, -211, 22, 211, 2212, -2212}
-ENERGY_CUT = 0.0000   # adjustable threshold
+ENERGY_CUT = 0.01   # adjustable threshold
 
 # ================================
 # Input samples
@@ -88,7 +88,7 @@ def make_patch(event_hits, bx, by, bz, patch_size, source_label):
     z_c   = int(np.clip(z_c,   patch_half, N_Z_BINS  - patch_half - 1))
     phi_c = int(np.clip(phi_c, patch_half, N_PHI_BINS - patch_half - 1))
 
-    patch = np.zeros((2, patch_size, patch_size), dtype=np.float32)
+    patch = np.zeros((4, patch_size, patch_size), dtype=np.float32)
     patch_hits = []
 
     for h in event_hits:
@@ -104,7 +104,12 @@ def make_patch(event_hits, bx, by, bz, patch_size, source_label):
         iphi = dphi + patch_half
 
         layer = get_layer_AB(h)
+        #Energy deposition
         patch[layer, iz, iphi] += h.edep
+
+        #Hit multiplicity
+        patch[layer + 2, iz, iphi] += 1
+
         patch_hits.append(h)
 
     if not patch_hits:
@@ -148,7 +153,7 @@ def process_file(filename, sample_label, sample_name, patch_size, max_events):
                 if mc is None:
                     pid = None
                     trackID = -1
-                    energy = 0.0
+                    #energy = 0.0
                 else:
                     pid = mc.getPDG()
                     trackID = mc.getObjectID().index
@@ -201,7 +206,7 @@ def process_file(filename, sample_label, sample_name, patch_size, max_events):
 # ================================
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out", type=str, default="AB_patches_final_2.npz")
+    parser.add_argument("--out", type=str, default="AB_patches_multiplicity_energycut.npz")
     parser.add_argument("--patch-size", type=int, default=DEFAULT_PATCH_SIZE)
     parser.add_argument("--max-files", type=int, default=None)
     args = parser.parse_args()

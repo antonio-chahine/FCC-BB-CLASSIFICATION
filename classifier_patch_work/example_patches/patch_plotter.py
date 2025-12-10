@@ -65,7 +65,7 @@ def mega_browser(
 # -------------------------
 # Example usage
 # -------------------------
-npz = np.load("AB_patches_final.npz")
+npz = np.load("/work/submit/anton100/msci-project/FCC-BB-CLASSIFICATION/classifier_patch_work/AB_patches_final_2.npz")
 X = npz["X"]
 y = npz["y"]
 
