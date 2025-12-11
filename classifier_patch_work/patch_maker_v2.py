@@ -29,7 +29,7 @@ R_BOUNDARY_AB = 13.919
 DEFAULT_PATCH_SIZE = 32
 
 # Noise definition for reassignment
-noise_pids = {11, -11, 13, -13, -211, 22, 211, 2212, -2212}
+noise_pids = {11, -11, 22}
 ENERGY_CUT = 0.01   # adjustable threshold
 
 # ================================
@@ -67,10 +67,10 @@ def classify_patch(patch_hits, source_label):
         return 0   # ALWAYS background
 
     # Check noise conditions
-    all_noise_pid = all((h.pid in noise_pids or h.pid is None) for h in patch_hits)
-    all_low_energy = all(h.edep < ENERGY_CUT for h in patch_hits)
+    all_noise_pid = all(h.pid in noise_pids for h in patch_hits)
+    all_low_mc_energy = all(h.energy < ENERGY_CUT for h in patch_hits)
 
-    if all_noise_pid and all_low_energy:
+    if all_noise_pid and all_low_mc_energy:
         return 0
 
     return 1
@@ -153,7 +153,7 @@ def process_file(filename, sample_label, sample_name, patch_size, max_events):
                 if mc is None:
                     pid = None
                     trackID = -1
-                    #energy = 0.0
+                    energy = 999.0 #doesn't affect CNN because only edep (pixel energy) is used. Need to cut out background like cuts
                 else:
                     pid = mc.getPDG()
                     trackID = mc.getObjectID().index
@@ -206,7 +206,7 @@ def process_file(filename, sample_label, sample_name, patch_size, max_events):
 # ================================
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out", type=str, default="AB_patches_multiplicity_energycut.npz")
+    parser.add_argument("--out", type=str, default="AB_patches_multiplicity_energycut_v2.npz")
     parser.add_argument("--patch-size", type=int, default=DEFAULT_PATCH_SIZE)
     parser.add_argument("--max-files", type=int, default=None)
     args = parser.parse_args()
