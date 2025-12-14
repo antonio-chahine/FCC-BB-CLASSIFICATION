@@ -19,8 +19,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--classify", action="store_true")
 parser.add_argument("--evaluate", action="store_true")
 parser.add_argument("--data", default="muons_energyv2_multiplicity_patches.npz")
-parser.add_argument("--sweep", action="store_true", help="Run internal hyperparameter sweep")
-parser.add_argument("--inspectsweep", action="store_true")
 args = parser.parse_args()
 
 # ======================================================================
@@ -28,7 +26,7 @@ args = parser.parse_args()
 # ======================================================================
 if args.classify:
 
-    outdir = "CNN_muons_energyv2_multiplicity_patches"
+    outdir = "CNN_muons_energyv2_multiplicity_patches_2"
     os.makedirs(outdir, exist_ok=True)
 
     print("Loading dataset...")
@@ -60,16 +58,18 @@ if args.classify:
     # CNN MODEL (same style as notes: Sequential + simple)
     # ======================================================================
     model = nn.Sequential(
-        nn.Conv2d(4, 32, kernel_size=3, padding=1), #change for 4 input channels
+        nn.Conv2d(4, 16, kernel_size=3, padding=1), 
         nn.ReLU(),
         nn.MaxPool2d(2),
+        nn.Dropout(0.1),
 
-        nn.Conv2d(32, (2*32), kernel_size=3, padding=1),
+        nn.Conv2d(16, (2*16), kernel_size=3, padding=1),
         nn.ReLU(),
         nn.MaxPool2d(2),
+        nn.Dropout(0.1),
 
         nn.Flatten(),
-        nn.Linear((2*32) * 8 * 8, 1),   # for 32x32 input
+        nn.Linear((2*16) * 8 * 8, 1), 
     ).to(device)
 
 
@@ -118,11 +118,30 @@ if args.classify:
 
         return total/len(dloader_train), vtotal/len(dloader_validate)
 
+
+    best_val = float("inf")
+    patience = 30
+    wait = 0
+
     print("Training CNN...")
     for epoch in trange(100, desc="Epochs"):
         train_l, val_l = train_epoch()
         tloss.append(train_l)
         vloss.append(val_l)
+
+        # Early stopping
+        if val_l < best_val:
+            best_val = val_l
+            wait = 0
+            best_model_state = model.state_dict()
+        else:
+            wait += 1
+            if wait >= patience:
+                print("Early stopping triggered.")
+                break
+
+    # restore best model
+    model.load_state_dict(best_model_state)
 
     np.save(f"{outdir}/CNN_losses.npy", np.array([tloss, vloss]))
     torch.save(model, f"{outdir}/CNN_model.pt")
@@ -142,7 +161,7 @@ if args.classify:
 # ======================================================================
 if args.evaluate:
     
-    outdir = "CNN_muons_energyv2_multiplicity_patches"
+    outdir = "CNN_muons_energyv2_multiplicity_patches_2"
     os.makedirs(outdir, exist_ok=True)
 
     # Load model + losses + splits
@@ -216,182 +235,4 @@ if args.evaluate:
     ax.grid(alpha=0.3)
     plt.savefig(f"{outdir}/CNN_ROC.pdf")
     plt.close()
-
-
-# ======================================================================
-# HYPERPARAMETER SWEEP (prints results AND saves best model)
-# ======================================================================
-if args.sweep:
-
-    print("Loading dataset...")
-    npz = np.load(args.data)
-    X = npz["X"].astype(np.float32)
-    y = npz["y"].astype(np.float32)
-    X /= np.max(X)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Using device:", device)
-
-    # ---------------------------
-    # Train + evaluate function
-    # ---------------------------
-    def train_and_evaluate(hparams):
-        lr     = hparams["lr"]
-        batch  = hparams["batch"]
-        F      = hparams["filters"]
-        epochs = hparams["epochs"]
-
-        # Dataset
-        X_torch = torch.tensor(X, dtype=torch.float32)
-        y_torch = torch.tensor(y, dtype=torch.float32).view(-1,1)
-        dataset = TensorDataset(X_torch, y_torch)
-
-        train_set, val_set, test_set = random_split(
-            dataset, [0.6,0.2,0.2], generator=torch.Generator().manual_seed(2)
-        )
-
-        train_loader = DataLoader(train_set, batch_size=batch, shuffle=True)
-        test_loader  = DataLoader(test_set, batch_size=batch, shuffle=False)
-
-        # Model
-        model = nn.Sequential(
-            nn.Conv2d(4, F, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-
-            nn.Conv2d(F, 2*F, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-
-            nn.Flatten(),
-            nn.Linear((2*F)*8*8, 1),
-        ).to(device)
-
-        # Loss
-        N_pos = y_torch.sum()
-        N_neg = len(y_torch) - N_pos
-        pos_weight = torch.tensor([N_neg / N_pos], dtype=torch.float32).to(device)
-        loss_fcn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-        opt = torch.optim.Adam(model.parameters(), lr=lr)
-
-        # Training
-        for _ in range(epochs):
-            model.train()
-            for xb, yb in train_loader:
-                xb, yb = xb.to(device), yb.to(device)
-                pred = model(xb)
-                loss = loss_fcn(pred, yb)
-                opt.zero_grad()
-                loss.backward()
-                opt.step()
-
-        # Evaluation
-        preds, labels = [], []
-        model.eval()
-        with torch.no_grad():
-            for xb, yb in test_loader:
-                logits = model(xb.to(device)).cpu()
-                p = torch.sigmoid(logits)
-                preds.append(p)
-                labels.append(yb)
-
-        preds  = torch.cat(preds).numpy()
-        labels = torch.cat(labels).numpy()
-
-        fpr, tpr, _ = roc_curve(labels, preds)
-        auc = roc_auc_score(labels, preds)
-
-        return auc, (fpr, tpr), model.state_dict()
-
-    # ---------------------------
-    # Hyperparameter ranges
-    # ---------------------------
-    lr_range     = [1e-3, 5e-4]
-    batch_range  = [128, 256]
-    filter_range = [8, 16, 32]
-    epoch_range  = [30]
-
-    results = []
-
-    print("\nRunning hyperparameter sweep...\n")
-
-    # ---------------------------
-    # Grid search
-    # ---------------------------
-    for lr in lr_range:
-        for batch in batch_range:
-            for F in filter_range:
-                for epochs in epoch_range:
-
-                    hparams = dict(lr=lr, batch=batch, filters=F, epochs=epochs)
-                    print(f"Testing {hparams} ...")
-
-                    auc, roc_pair, weights = train_and_evaluate(hparams)
-                    results.append((auc, hparams, roc_pair, weights))
-
-                    print(f" → AUC = {auc:.4f}\n")
-
-    # ---------------------------
-    # Select best model
-    # ---------------------------
-    best_auc, best_hparams, best_roc, best_weights = max(results, key=lambda x: x[0])
-
-    print("\n========================")
-    print(" BEST MODEL FOUND")
-    print("========================")
-    print(f"Hyperparameters: {best_hparams}")
-    print(f"Best AUC: {best_auc:.4f}")
-    print("========================\n")
-
-    # ---------------------------
-    # Save best model + ROC + hparams
-    # ---------------------------
-    outdir = "CNN_best_sweep_result_muons_energycut_multiplicity"
-    os.makedirs(outdir, exist_ok=True)
-
-    torch.save(best_weights, f"{outdir}/best_model_weights.pt")
-    np.save(f"{outdir}/best_ROC.npy", np.array(best_roc))
-    np.save(f"{outdir}/best_hparams.npy", best_hparams)
-
-    print(f"Saved best results to: {outdir}/")
-
-    quit()
-
-if args.inspectsweep:
-    import torch
-    import numpy as np
-    import matplotlib.pyplot as plt
-
-    outdir = "CNN_best_sweep_result_muons_energycut_multiplicity"
-
-    # --------------------------------------------------------
-    # Load hyperparameters
-    # --------------------------------------------------------
-    best_hparams = np.load(f"{outdir}/best_hparams.npy", allow_pickle=True).item()
-    print("Best hyperparameters:")
-    print(best_hparams)
-
-    # --------------------------------------------------------
-    # Load ROC curve
-    # --------------------------------------------------------
-    fpr, tpr = np.load(f"{outdir}/best_ROC.npy", allow_pickle=True)
-    auc = np.trapz(tpr, fpr)
-    print(f"AUC (recomputed) = {auc:.4f}")
-
-    # --------------------------------------------------------
-    # Plot ROC
-    # --------------------------------------------------------
-    plt.figure(figsize=(6,5), dpi=150)
-    plt.plot(fpr, tpr, label=f"AUC = {auc:.4f}", color="#D55E00")
-    plt.plot([0,1],[0,1],"--", color="black")
-    plt.xlabel("False positive rate")
-    plt.ylabel("True positive rate")
-    plt.title("Best ROC from Sweep")
-    plt.grid(alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(f"{outdir}/ROC_reloaded.pdf")
-    plt.close()
-
-    print(f"ROC curve saved to {outdir}/ROC_reloaded.pdf")
 

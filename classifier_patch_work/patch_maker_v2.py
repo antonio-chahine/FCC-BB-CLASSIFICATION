@@ -30,12 +30,16 @@ DEFAULT_PATCH_SIZE = 32
 
 # Noise definition for reassignment
 noise_pids = {11, -11, 22}
-ENERGY_CUT = 0.01   # adjustable threshold
+ENERGY_CUT = 0.0   # adjustable threshold
 
 # ================================
 # Input samples
 # ================================
 SAMPLES = {
+    'muons': {
+        'files': glob.glob('/ceph/submit/data/user/j/jaeyserm/fccee/beam_backgrounds/CLD_o2_v05/mu_theta_0-180_p_50/*.root'),
+        'label': 1
+        },
     "signal": {
         "files": glob.glob("/ceph/submit/data/group/fcc/ee/detector/VTXStudiesFullSim/CLD_wz3p6_ee_qq_ecm91p2/*.root"),
         "label": 1
@@ -46,7 +50,7 @@ SAMPLES = {
     },
 }
 
-EVENT_LIMITS = {"signal":100, "background":1247}
+EVENT_LIMITS = {"muons":978, "signal":100, "background":1247}
 
 # ================================
 # Helpers
@@ -206,7 +210,7 @@ def process_file(filename, sample_label, sample_name, patch_size, max_events):
 # ================================
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out", type=str, default="AB_patches_multiplicity_energycut_v2.npz")
+    parser.add_argument("--out", type=str, default="muons_noenergycut_multiplicity_patches.npz")
     parser.add_argument("--patch-size", type=int, default=DEFAULT_PATCH_SIZE)
     parser.add_argument("--max-files", type=int, default=None)
     args = parser.parse_args()
