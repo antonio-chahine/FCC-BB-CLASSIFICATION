@@ -271,6 +271,15 @@ def analytic_delta_z(hits, bx, by, bz):
     cotθ = math.cos(theta) / math.sin(theta)
     return abs(delta_r * cotθ)
 
+def r_xy(obj):
+    return math.sqrt(obj.x**2 + obj.y**2)
+
+def in_1B(obj, r_boundary=14.0):
+    """
+    Returns True if hit is in layer 1B (r >= 14 mm).
+    """
+    return r_xy(obj) >= r_boundary
+
     
     
 ####################Do overlap layer merging by summing energy and keeping innermost radius hit#####################
