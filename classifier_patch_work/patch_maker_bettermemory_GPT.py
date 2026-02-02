@@ -17,15 +17,15 @@ import functions
 # USER SETTINGS (edit these)
 # ============================================================
 OUTDIR = "/ceph/submit/data/user/a/anton100/msci-project"
-OUT_PREFIX = "muons_energycut_nomultiplcity_patches_32size_0.0125pixel"  # will create shards
+OUT_PREFIX = "muons_energycut_nomultiplcity_patches_32size_0.00625pixel"  # will create shards
 MAX_FILES = None          # e.g. 5 for debugging, or None for all
 FLUSH_EVERY = 500         # number of patches per shard
-MERGE_TO_SINGLE_NPZ = False  # set True if you really want one big .npz at the end (costly)
+MERGE_TO_SINGLE_NPZ = True  # set True if you really want one big .npz at the end (costly)
 
 # ============================================================
 # Geometry / pixel size
 # ============================================================
-functions.PITCH_MM = 0.0125
+functions.PITCH_MM = 0.00625
 
 PITCH_MM  = functions.PITCH_MM
 RADIUS_MM = functions.RADIUS_MM
@@ -152,9 +152,12 @@ def make_patch(event_hits, bx, by, bz, patch_size, source_label):
 # Sharded saving (safe incremental)
 # ============================================================
 def atomic_savez(path, **arrays):
-    tmp = path + ".tmp"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    tmp = path + ".tmp.npz"   # IMPORTANT: ends with .npz
     np.savez(tmp, **arrays)
-    os.replace(tmp, path)  # atomic on POSIX
+    os.replace(tmp, path)
+
 
 
 def shard_path(outdir, prefix, shard_idx):
@@ -220,20 +223,6 @@ def process_file(filename, sample_label, sample_name, patch_size, max_events):
 
     for i_event, event in enumerate(events):
 
-        t0_evt = time.time()
-        if i_event % 50 == 0:
-            print(f"  event {i_event}", flush=True)
-
-        # --- immediately time the collection fetch ---
-        t0 = time.time()
-        vb = event.get("VertexBarrelCollection")
-        t_get = time.time() - t0
-
-        # vb.size() is cheap and VERY informative
-        nhits = vb.size()
-        print(f"    got VB: nhits={nhits} (get took {t_get:.3f}s)", flush=True)
-
-
         if max_events and i_event >= max_events:
             break
 
@@ -274,7 +263,6 @@ def process_file(filename, sample_label, sample_name, patch_size, max_events):
             event_hits.append(h)
             particles[trackID].append(h)
 
-        print(f"    trackIDs={len(particles)}; event_hits={len(event_hits)}", flush=True)
         for hitlist in particles.values():
             if len(hitlist) == 2:
                 hitlist = functions.merge_cluster_hits(hitlist)
@@ -288,8 +276,6 @@ def process_file(filename, sample_label, sample_name, patch_size, max_events):
             if patch is not None:
                 patches.append(patch)
                 labels.append(label)
-
-        print(f"    event done in {time.time() - t0_evt:.2f}s; patches so far this file={len(labels)}", flush=True)
 
     return patches, labels
 
