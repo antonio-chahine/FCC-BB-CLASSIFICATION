@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-data = np.load("AB_patches_32x32.npz")
+data = np.load("muons_energycut_nomultiplcity_patches_32size_dphifix.npz")
 X = data["X"]
 y = data["y"]
 

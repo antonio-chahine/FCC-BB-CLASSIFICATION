@@ -15,13 +15,39 @@ from tqdm import trange
 # ============================================================
 # One-time conversion helper: .npz -> X.npy / y.npy (memmapable)
 # ============================================================
-def convert_npz_to_npy(npz_path: str, x_out: str, y_out: str) -> None:
+from tqdm import tqdm
+import numpy as np
+import os
+
+def convert_npz_to_npy(npz_path: str, x_out: str, y_out: str, chunk: int = 1024):
     os.makedirs(os.path.dirname(x_out) or ".", exist_ok=True)
     os.makedirs(os.path.dirname(y_out) or ".", exist_ok=True)
-    npz = np.load(npz_path)
-    np.save(x_out, npz["X"].astype(np.float32))
-    np.save(y_out, npz["y"].astype(np.float32))
-    print(f"Saved memmapable files:\n  X -> {x_out}\n  y -> {y_out}")
+
+    # 👇 key change
+    npz = np.load(npz_path, mmap_mode="r")
+
+    X = npz["X"]
+    y = npz["y"]
+
+    X_out = np.lib.format.open_memmap(
+        x_out, mode="w+", dtype=np.float32, shape=X.shape
+    )
+
+    for i in tqdm(range(0, X.shape[0], chunk), desc="Converting X", unit="rows"):
+        X_out[i:i+chunk] = X[i:i+chunk].astype(np.float32, copy=False)
+
+    del X_out
+
+    y_out_mem = np.lib.format.open_memmap(
+        y_out, mode="w+", dtype=np.float32, shape=y.shape
+    )
+
+    for i in tqdm(range(0, y.shape[0], chunk), desc="Converting y", unit="rows"):
+        y_out_mem[i:i+chunk] = y[i:i+chunk].astype(np.float32, copy=False)
+
+    del y_out_mem
+
+    print("Conversion finished.")
 
 # ============================================================
 # Streaming mean/std over memmap (no full RAM load)
