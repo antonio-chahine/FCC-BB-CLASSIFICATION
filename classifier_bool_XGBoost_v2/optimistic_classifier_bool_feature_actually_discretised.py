@@ -103,21 +103,31 @@ if args.run:
                     cos_theta = functions.cos_theta(b_x, b_y, b_z)
                     mc_energy = p.hits[0].energy
 
-                    ###changes
+                    # snap each hit to the centre of its pixel
+                    p.hits = functions.snap_hits_to_pixel_centers(p.hits, pitch_mm=PITCH, radius_mm=RADIUS)
 
+                    # recompute barycenter + cosθ on snapped hits
+                    b_x, b_y, b_z = functions.geometric_baricenter(p.hits)
+                    cos_theta = functions.cos_theta(b_x, b_y, b_z)
+
+                    # now compute features
                     z_ext = p.z_extent()
-
-                    
-                    # hit_B = 1 if ANY hit in the cluster is in layer 1B
-                    hit_B = int(any(functions.in_1B(h) for h in p.hits))
-                    
-                    ###
-
-
                     nrows = p.n_phi_rows(PITCH, RADIUS)
 
-                    cluster_metrics.append((z_ext, nrows, multiplicity, total_edep, mc_energy, cos_theta, b_x, b_y, pid, hit_B))
+                    # hit_B stays the same
+                    hit_B = int(any(functions.in_1B(h) for h in p.hits))
 
+                    cluster_metrics.append((
+                        z_ext,
+                        nrows,
+                        multiplicity,
+                        total_edep,
+                        mc_energy,
+                        cos_theta,
+                        b_x, b_y,
+                        pid,
+                        hit_B
+                    ))
         with open(outfile, 'wb') as f:
             pickle.dump(cluster_metrics, f)
         print(f"✅ Saved {label} clusters to {outfile}")
@@ -143,7 +153,7 @@ if args.classify:
     from functions import relabel_noise_clusters
 
     def get_features_and_labels(signal_data, background_data, epsilon=1e-6, max_samples=None):
-        def transform(row):
+        def transform(row, epsilon=epsilon):
             z, rows, mult, edep, _, cos, _, _, _, hit_B = row
             return (
                 math.log(z + epsilon),        # log(z_extent)
@@ -166,7 +176,7 @@ if args.classify:
         return np.array(features), np.array(labels)
 
 
-    outdir = 'Classification_AB'
+    outdir = 'Classification_AB_discretised'
     os.makedirs(outdir, exist_ok=True)
     random.seed(42)
 
@@ -288,17 +298,16 @@ if args.classify:
     clf.feature_importances_,
     feature_names=[
         r"$\log(\Delta z)$",
-        r"$\Delta\phi$ spread",
-        r"Multiplicity",
+        r"$\varphi$ extent",
+        r"multiplicity",
         r"$\log(E_{\mathrm{dep}})$",
         r"$\cos\theta$",
-        r"Outer layer (1B)"
+        r"$\mathrm{hit}_B$"
     ],
     outdir="Classification_AB",
     filename="feature_importance",
     sort=True
 )
-    
     
     import pickle
     with open("results_classifierB.pkl", "wb") as f:

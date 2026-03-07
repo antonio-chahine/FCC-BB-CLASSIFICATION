@@ -105,18 +105,26 @@ if args.run:
 
                     ###changes
 
-                    z_ext = p.z_extent()
+                    z_span_bins, phi_span_bins, n_phi_unique, n_z_unique = functions.discretised_cluster_features(
+                        p.hits, pitch_mm=PITCH, radius_mm=RADIUS
+                    )
 
-                    
-                    # hit_B = 1 if ANY hit in the cluster is in layer 1B
+                    # keep hit_B as-is (still uses radius boundary)
                     hit_B = int(any(functions.in_1B(h) for h in p.hits))
-                    
-                    ###
 
-
-                    nrows = p.n_phi_rows(PITCH, RADIUS)
-
-                    cluster_metrics.append((z_ext, nrows, multiplicity, total_edep, mc_energy, cos_theta, b_x, b_y, pid, hit_B))
+                    cluster_metrics.append((
+                        z_span_bins,
+                        phi_span_bins,
+                        n_phi_unique,
+                        n_z_unique,
+                        multiplicity,
+                        total_edep,
+                        mc_energy,
+                        cos_theta,
+                        b_x, b_y,
+                        pid,
+                        hit_B
+                    ))
 
         with open(outfile, 'wb') as f:
             pickle.dump(cluster_metrics, f)
@@ -143,15 +151,17 @@ if args.classify:
     from functions import relabel_noise_clusters
 
     def get_features_and_labels(signal_data, background_data, epsilon=1e-6, max_samples=None):
-        def transform(row):
-            z, rows, mult, edep, _, cos, _, _, _, hit_B = row
+        def transform(row, epsilon=1e-6):
+            z_span_bins, phi_span_bins, n_phi_unique, n_z_unique, mult, edep, _, cos, _, _, _, hit_B = row
             return (
-                math.log(z + epsilon),        # log(z_extent)
-                rows,                         # number of φ rows
-                mult,                         # multiplicity
-                math.log(edep + epsilon),     # log(energy deposition)
-                cos,                           # cos(θ)
-                hit_B                        # hit in region B (1 if hit, 0 if not)
+                math.log(z_span_bins + 1.0),     # log(Δz bins + 1)
+                phi_span_bins,                  # φ-span in bins (wrap-aware)
+                n_phi_unique,                   # unique φ bins hit
+                n_z_unique,                     # unique z bins hit
+                mult,                           # multiplicity
+                math.log(edep + epsilon),       # log(Edep)
+                cos,                            # cos(theta)
+                hit_B                           # AB info
             )
         
         sig = [(1, transform(row)) for row in signal_data]
@@ -194,8 +204,9 @@ if args.classify:
 
     # === Feature extraction and split ===
     X, y = get_features_and_labels(sampled_signal, all_background)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
 
     clf = xgb.XGBClassifier(
         use_label_encoder=False,
@@ -285,20 +296,21 @@ if args.classify:
     plt.close()
     
     functions.plot_feature_importance(
-    clf.feature_importances_,
-    feature_names=[
-        r"$\log(\Delta z)$",
-        r"$\Delta\phi$ spread",
-        r"Multiplicity",
-        r"$\log(E_{\mathrm{dep}})$",
-        r"$\cos\theta$",
-        r"Outer layer (1B)"
-    ],
-    outdir="Classification_AB",
-    filename="feature_importance",
-    sort=True
-)
-    
+        clf.feature_importances_,
+        feature_names=[
+            r"$\log(\Delta z_{\mathrm{bins}}+1)$",
+            r"$\Delta\varphi_{\mathrm{bins}}$",
+            r"$N_{\varphi,\mathrm{bins}}$",
+            r"$N_{z,\mathrm{bins}}$",
+            r"$N_{\mathrm{hits}}$",
+            r"$\log(E_{\mathrm{dep}})$",
+            r"$\cos\theta$",
+            r"$\mathrm{hit}_B$",
+        ],
+        outdir="Classification_AB",
+        filename="feature_importance",
+        sort=True
+    )
     
     import pickle
     with open("results_classifierB.pkl", "wb") as f:

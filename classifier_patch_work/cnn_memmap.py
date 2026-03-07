@@ -109,32 +109,28 @@ class SimpleCNN(nn.Module):
     def __init__(self):
         super().__init__()
         self.features = nn.Sequential(
-            nn.Conv2d(2, 16, 3, padding=1),
+            nn.Conv2d(2, 32, 3, padding=1),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.MaxPool2d(2),
-            nn.Dropout(0.1),
 
-            nn.Conv2d(16, 32, 3, padding=1),
+            nn.Conv2d(32, 64, 3, padding=1),
+            nn.BatchNorm2d(64),
             nn.ReLU(),
             nn.MaxPool2d(2),
-            nn.Dropout(0.1),
+
+            nn.Conv2d(64, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
         )
-        self.classifier = None  # built later
-
-    def build_classifier(self, input_shape, device):
-        with torch.no_grad():
-            x = torch.zeros(1, *input_shape, device=device)
-            x = self.features(x)
-            n_flat = x.numel()
         self.classifier = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
-            nn.Linear(n_flat, 1),
-        ).to(device)
+            nn.Linear(128, 1),
+        )
 
     def forward(self, x):
-        x = self.features(x)
-        x = self.classifier(x)
-        return x
+        return self.classifier(self.features(x))
 
 # ============================================================
 # Split helpers
@@ -160,7 +156,7 @@ def compute_pos_weight_from_memmap(y_mmap: np.memmap):
 # ============================================================
 # Train
 # ============================================================
-def train_model(x_path, y_path, outdir, batch_size=128, epochs=100, patience=30, seed=2, num_workers=2):
+def train_model(x_path, y_path, outdir, batch_size=64, epochs=100, patience=30, seed=2, num_workers=1):
     os.makedirs(outdir, exist_ok=True)
 
     X_mmap = np.load(x_path, mmap_mode="r")
@@ -178,19 +174,18 @@ def train_model(x_path, y_path, outdir, batch_size=128, epochs=100, patience=30,
 
     dloader_train = DataLoader(
         train_set, batch_size=batch_size, shuffle=True,
-        num_workers=num_workers, pin_memory=True
+        num_workers=num_workers, pin_memory=False
     )
     dloader_val = DataLoader(
         val_set, batch_size=batch_size, shuffle=False,
-        num_workers=num_workers, pin_memory=True
+        num_workers=num_workers, pin_memory=False
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using:", device)
 
     model = SimpleCNN().to(device)
-    H, W = X_mmap.shape[2], X_mmap.shape[3]
-    model.build_classifier((2, H, W), device)
+
 
     pos_weight_val = compute_pos_weight_from_memmap(y_mmap)
     pos_weight = torch.tensor([pos_weight_val], dtype=torch.float32, device=device)
@@ -269,7 +264,7 @@ def train_model(x_path, y_path, outdir, batch_size=128, epochs=100, patience=30,
 # ============================================================
 # Evaluate (plots go to plotdir, model+metadata stay in outdir)
 # ============================================================
-def evaluate_model(outdir, plotdir, batch_size=256, num_workers=2):
+def evaluate_model(outdir, plotdir, batch_size=256, num_workers=1):
     os.makedirs(outdir, exist_ok=True)
     os.makedirs(plotdir, exist_ok=True)
 
@@ -433,7 +428,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--patience", type=int, default=30)
-    parser.add_argument("--num-workers", type=int, default=2)
+    parser.add_argument("--num-workers", type=int, default=1)
     args = parser.parse_args()
 
     if args.npz is not None:

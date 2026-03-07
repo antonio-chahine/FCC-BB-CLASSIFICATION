@@ -282,6 +282,79 @@ def in_1B(obj, r_boundary=14.0):
 
     
     
+
+######DISCRETISATION OF DECISION TREE######
+def phi_span_bins(phi_indices, n_phi_bins):
+    """
+    Minimal span in phi bins on a circle (wrap-around aware).
+    Returns an integer span in [0, n_phi_bins-1].
+    """
+    if not phi_indices:
+        return 0
+    if len(phi_indices) == 1:
+        return 0
+
+    phis = sorted(int(p) % n_phi_bins for p in phi_indices)
+    # gaps between consecutive occupied bins (including wrap-around gap)
+    gaps = [phis[i+1] - phis[i] for i in range(len(phis)-1)]
+    gaps.append((phis[0] + n_phi_bins) - phis[-1])  # wrap gap
+
+    # minimal arc covering all points = total - largest empty gap
+    largest_gap = max(gaps)
+    span = n_phi_bins - largest_gap
+    return int(span)
+
+
+def discretised_cluster_features(hits, pitch_mm=PITCH_MM, radius_mm=RADIUS_MM):
+    """
+    Compute cluster features using discretised (z_index, phi_index) rather than coordinates.
+    Returns:
+        z_span_bins, phi_span_bins, n_unique_phi_bins, n_unique_z_bins
+    """
+    if not hits:
+        return 0, 0, 0, 0
+
+    z_idx = []
+    phi_idx = []
+    for h in hits:
+        zi, pi = get_grid_indices(h.x, h.y, h.z)
+        z_idx.append(zi)
+        phi_idx.append(pi)
+
+    z_span = max(z_idx) - min(z_idx)
+    phi_span = phi_span_bins(phi_idx, n_phi_bins=n_phi_bins)
+
+    n_phi_unique = len(set(phi_idx))
+    n_z_unique = len(set(z_idx))
+
+    return int(z_span), int(phi_span), int(n_phi_unique), int(n_z_unique)
+
+
+def hit_to_pixel_center(hit, pitch_mm=PITCH_MM, radius_mm=RADIUS_MM):
+    """
+    Snap a hit to the centre of its pixel in (z, phi-arc) binning.
+    """
+    z_idx, phi_idx = get_grid_indices(hit.x, hit.y, hit.z)
+
+    # centre in z
+    z_center = -max_z + (z_idx + 0.5) * pitch_mm
+
+    # centre in phi
+    dphi = 2.0 * math.pi / float(n_phi_bins)
+    phi_center = (phi_idx + 0.5) * dphi
+
+    # back to x,y on barrel
+    x_center = radius_mm * math.cos(phi_center)
+    y_center = radius_mm * math.sin(phi_center)
+
+    return Hit(
+        x=x_center, y=y_center, z=z_center,
+        energy=hit.energy, edep=hit.edep, trackID=hit.trackID
+    )
+
+def snap_hits_to_pixel_centers(hits, pitch_mm=PITCH_MM, radius_mm=RADIUS_MM):
+    return [hit_to_pixel_center(h, pitch_mm=pitch_mm, radius_mm=radius_mm) for h in hits]
+
 ####################Do overlap layer merging by summing energy and keeping innermost radius hit#####################
 def merge_cluster_hits(hits: List['Hit']) -> List['Hit']:
     """
@@ -775,6 +848,74 @@ def get_features_and_labels(signal_data, background_data, epsilon=1e-6, max_samp
     labels, features = zip(*data)
     return np.array(features), np.array(labels)
 
+def plot_feature_importance(importances, feature_names,
+                            outdir=".", filename="feature_importance",
+                            sort=True, dpi=400):
+
+    import os
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    if len(importances) != len(feature_names):
+        raise ValueError(f"Mismatch: {len(importances)=} vs {len(feature_names)=}")
+
+    importances = np.asarray(importances, dtype=float)
+    names = list(feature_names)
+
+    # Sort descending
+    if sort:
+        idx = np.argsort(importances)[::-1]
+        importances = importances[idx]
+        names = [names[i] for i in idx]
+
+    n = len(names)
+
+    with plt.style.context("default"), plt.rc_context({
+        "font.size": 12,
+        "axes.labelsize": 18,
+        "xtick.labelsize": 16,
+        "ytick.labelsize": 12,
+        "axes.linewidth": 1.0,
+    }):
+
+        fig, ax = plt.subplots(figsize=(6.5, 7.5))
+
+        x = np.arange(n)
+        bars = ax.bar(x, importances, edgecolor="black", linewidth=0.8)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(names, rotation=30, ha="right")
+
+        ax.set_ylabel("Importance")
+        ax.set_title(
+            "XGBoost Feature Importance",
+            fontsize=16,
+            fontweight="bold",
+            pad=12
+        )
+
+        # Light horizontal grid
+        ax.grid(True, axis="y", linestyle="--", linewidth=0.8, alpha=0.35)
+        ax.set_axisbelow(True)
+
+        ymax = float(np.max(importances)) if n else 1.0
+        ax.set_ylim(0.0, 1.15 * ymax)
+
+        # Value labels above bars
+        for xi, v in zip(x, importances):
+            ax.text(xi, v + 0.02 * ymax, f"{v:.3f}",
+                    ha="center", va="bottom", fontsize=11)
+
+        fig.tight_layout()
+
+        os.makedirs(outdir, exist_ok=True)
+        fig.savefig(os.path.join(outdir, f"{filename}.pdf"),
+                    dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
+
+
+
+'''
 def plot_feature_importance(importances, feature_names, outdir=".", filename="feature_importance", sort=True):
     # Sanity check
     assert len(importances) == len(feature_names), "Mismatch between importances and names"
@@ -798,3 +939,4 @@ def plot_feature_importance(importances, feature_names, outdir=".", filename="fe
     fig.tight_layout()
     plt.savefig(os.path.join(outdir, f"{filename}.png"), dpi=300)
     plt.close()
+'''

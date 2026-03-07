@@ -30,23 +30,29 @@ global_vmax = max(
 # -----------------------------
 eps = 1e-8  # avoid log(0)
 
-cmap = plt.cm.inferno.copy()
-cmap.set_under("black")  # zero → black instead of white
+cmap = plt.cm.Blues.copy()
+
 
 # -----------------------------
 # Create figure
 # -----------------------------
 fig, axes = plt.subplots(2, 1, figsize=(10, 14))
+fig.suptitle(
+    "Example Patches",
+    fontsize=20,
+    fontweight="bold",
+    y=0.945,   # controls vertical position
+    x = 0.474
+)
 
 for ax, idx, title in zip(axes, indices, titles):
 
     patch = X[idx,0] + X[idx,1]
-    patch_safe = np.where(patch > 0, patch, eps)
-
+    patch_masked = np.ma.masked_where(patch == 0, patch)
+    patch_t = patch_masked.T
     # -----------------------------
     # Swap axes → z on x-axis, φ on y-axis
     # -----------------------------
-    patch_t = patch_safe.T
 
     im = ax.imshow(
         patch_t,
@@ -56,13 +62,13 @@ for ax, idx, title in zip(axes, indices, titles):
         aspect="equal"
     )
 
-    ax.set_title(f"{title}", fontsize=22)
+    ax.set_title(f"{title}", fontsize=18)
 
     # -----------------------------
     # AXIS LABELS BUT NO NUMBERS
     # -----------------------------
-    ax.set_xlabel("z axis", fontsize=18)
-    ax.set_ylabel("φ axis", fontsize=18)
+    ax.set_xlabel("z axis", fontsize=15)
+    ax.set_ylabel("φ axis", fontsize=15)
 
     ax.set_xticks([])   # hide tick numbers
     ax.set_yticks([])
@@ -100,5 +106,5 @@ plt.subplots_adjust(
     wspace=0.25
 )
 
-plt.savefig("phi_z_comparison_clean.png", dpi=200)
+plt.savefig("phi_z_comparison_clean.pdf", dpi=200)
 plt.show()

@@ -1,0 +1,5 @@
+seed 6
+ROC_AUC 0.939948
+TPR>=0.900 achieved=0.900111 bkg_rej=0.832882 fpr=0.167118 thr=0.392329
+TPR>=0.990 achieved=0.990022 bkg_rej=0.237580 fpr=0.762420 thr=0.086868
+TPR>=0.999 achieved=0.999003 bkg_rej=0.024245 fpr=0.975755 thr=0.005832
